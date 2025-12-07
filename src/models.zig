@@ -15,9 +15,13 @@ pub const Currency = enum {
     }
 
     pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: json.ParseOptions) !Currency {
+        _ = allocator;
         _ = options;
-        const str = try source.nextAlloc(allocator, .alloc_always);
-        defer allocator.free(str);
+        const token = try source.next();
+        const str = switch (token) {
+            .string, .allocated_string => |s| s,
+            else => return error.UnexpectedToken,
+        };
         return std.meta.stringToEnum(Currency, str) orelse error.InvalidCurrency;
     }
 };
@@ -55,7 +59,11 @@ pub const User = union(enum) {
 
     pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: json.ParseOptions) !User {
         _ = options;
-        const str = try source.nextAlloc(allocator, .alloc_always);
+        const token = try source.next();
+        const str = switch (token) {
+            .string, .allocated_string => |s| s,
+            else => return error.UnexpectedToken,
+        };
         var it = std.mem.splitScalar(u8, str, '|');
 
         const typ = it.next() orelse return error.InvalidUser;
@@ -126,17 +134,21 @@ pub const AuctionTypeOptions = struct {
     }
 
     pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: json.ParseOptions) !AuctionTypeOptions {
+        _ = allocator;
         _ = options;
-        const str = try source.nextAlloc(allocator, .alloc_always);
-        defer allocator.free(str);
+        const token = try source.next();
+        const str = switch (token) {
+            .string, .allocated_string => |s| s,
+            else => return error.UnexpectedToken,
+        };
 
         var it = std.mem.splitScalar(u8, str, '|');
-        const typ = it.next() orelse return error.InvalidAuctionType;
-        if (!std.mem.eql(u8, typ, "English")) return error.InvalidAuctionType;
+        const typ = it.next() orelse return error.SyntaxError;
+        if (!std.mem.eql(u8, typ, "English")) return error.SyntaxError;
 
-        const reserve_str = it.next() orelse return error.InvalidAuctionType;
-        const min_raise_str = it.next() orelse return error.InvalidAuctionType;
-        const time_frame_str = it.next() orelse return error.InvalidAuctionType;
+        const reserve_str = it.next() orelse return error.SyntaxError;
+        const min_raise_str = it.next() orelse return error.SyntaxError;
+        const time_frame_str = it.next() orelse return error.SyntaxError;
 
         return AuctionTypeOptions{
             .reserve_price = try std.fmt.parseInt(i64, reserve_str, 10),

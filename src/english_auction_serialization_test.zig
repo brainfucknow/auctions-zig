@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const models = @import("models.zig");
 const json = std.json;
+const ArrayList = std.array_list.Managed;
 
 const AuctionTypeOptions = models.AuctionTypeOptions;
 
@@ -14,13 +15,21 @@ test "english auction type - can serialize default options" {
         .time_frame_seconds = 0,
     };
 
-    var string = std.ArrayList(u8).init(allocator);
-    defer string.deinit();
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
 
-    try json.stringify(options, .{}, string.writer());
+    var jws: json.Stringify = .{
+        .writer = &out.writer,
+        .options = .{},
+    };
+    try options.jsonStringify(&jws);
+
+    var array_list = out.toArrayList();
+    const result = try array_list.toOwnedSlice(allocator);
+    defer allocator.free(result);
 
     const expected = "\"English|0|0|0\"";
-    try testing.expectEqualStrings(expected, string.items);
+    try testing.expectEqualStrings(expected, result);
 }
 
 test "english auction type - can deserialize default options" {
@@ -45,13 +54,21 @@ test "english auction type - can serialize options with values" {
         .time_frame_seconds = 30,
     };
 
-    var string = std.ArrayList(u8).init(allocator);
-    defer string.deinit();
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
 
-    try json.stringify(options, .{}, string.writer());
+    var jws: json.Stringify = .{
+        .writer = &out.writer,
+        .options = .{},
+    };
+    try options.jsonStringify(&jws);
+
+    var array_list = out.toArrayList();
+    const result = try array_list.toOwnedSlice(allocator);
+    defer allocator.free(result);
 
     const expected = "\"English|10|20|30\"";
-    try testing.expectEqualStrings(expected, string.items);
+    try testing.expectEqualStrings(expected, result);
 }
 
 test "english auction type - can deserialize options with values" {
@@ -77,12 +94,21 @@ test "english auction type - round trip serialization" {
     };
 
     // Serialize
-    var string = std.ArrayList(u8).init(allocator);
-    defer string.deinit();
-    try json.stringify(original, .{}, string.writer());
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    var jws: json.Stringify = .{
+        .writer = &out.writer,
+        .options = .{},
+    };
+    try original.jsonStringify(&jws);
+
+    var array_list = out.toArrayList();
+    const serialized = try array_list.toOwnedSlice(allocator);
+    defer allocator.free(serialized);
 
     // Deserialize
-    const parsed = try json.parseFromSlice(AuctionTypeOptions, allocator, string.items, .{});
+    const parsed = try json.parseFromSlice(AuctionTypeOptions, allocator, serialized, .{});
     defer parsed.deinit();
 
     // Should match original
@@ -98,7 +124,7 @@ test "english auction type - deserialization fails on invalid format" {
 
     const result = json.parseFromSlice(AuctionTypeOptions, allocator, invalid_json, .{});
 
-    try testing.expectError(error.InvalidAuctionType, result);
+    try testing.expectError(error.SyntaxError, result);
 }
 
 test "english auction type - deserialization fails on non-English type" {
@@ -108,7 +134,7 @@ test "english auction type - deserialization fails on non-English type" {
 
     const result = json.parseFromSlice(AuctionTypeOptions, allocator, invalid_json, .{});
 
-    try testing.expectError(error.InvalidAuctionType, result);
+    try testing.expectError(error.SyntaxError, result);
 }
 
 test "english auction type - deserialization fails on invalid numbers" {
