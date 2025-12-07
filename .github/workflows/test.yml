@@ -8,25 +8,6 @@ on:
 
 jobs:
   test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Setup Zig
-      uses: mlugg/setup-zig@v1
-      with:
-        version: 0.15.2
-
-    - name: Run tests
-      run: zig build test
-
-    - name: Build project
-      run: zig build
-
-  test-matrix:
     name: Test on Multiple Platforms
     runs-on: ${{ matrix.os }}
     strategy:
@@ -39,7 +20,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Setup Zig
-      uses: mlugg/setup-zig@v1
+      uses: mlugg/setup-zig@v2
       with:
         version: ${{ matrix.zig-version }}
 
