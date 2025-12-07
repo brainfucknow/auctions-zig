@@ -1,0 +1,7 @@
+{"$type":"auction_added","at":1589702116,"auction":{"id":1,"starts_at":1543658400,"title":"Some auction","expiry":1589796000,"seller":"BuyerOrSeller|a1|Test","typ":"English|0|0|0","currency":"VAC"}}
+{"$type":"auction_added","at":1589702119,"auction":{"id":2,"starts_at":1543658400,"title":"Some auction","expiry":1589796000,"seller":"BuyerOrSeller|a1|Test","typ":"English|0|0|0","currency":"VAC"}}
+{"$type":"bid_accepted","at":1589702122,"bid":{"auction_id":1,"bidder":"BuyerOrSeller|a2|Buyer","at":1589702122,"amount":11}}
+{"$type":"bid_accepted","at":1589702125,"bid":{"auction_id":2,"bidder":"BuyerOrSeller|a2|Buyer","at":1589702125,"amount":11}}
+{"$type":"bid_accepted","at":1589702127,"bid":{"auction_id":1,"bidder":"BuyerOrSeller|a1|Test","at":1589702127,"amount":11}}
+{"$type":"bid_accepted","at":1589702130,"bid":{"auction_id":2,"bidder":"BuyerOrSeller|a1|Test","at":1589702130,"amount":11}}
+{"$type":"auction_added","at":1589702779,"auction":{"id":1,"starts_at":1543658400,"title":"Some auction","expiry":1589796000,"seller":"BuyerOrSeller|a1|Test","typ":"English|0|0|0","currency":"VAC"}}
