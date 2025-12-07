@@ -121,30 +121,6 @@ The project is organized into modules:
 
 The application uses event sourcing to persist all changes. Events are stored in `tmp/events.jsonl` as newline-delimited JSON. On startup, the application replays all events to rebuild the current state.
 
-## Installing Zig
-
-If you don't have Zig installed, you can install it using:
-
-### Linux/macOS
-```bash
-# Using the official installer
-curl -O https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
-tar -xf zig-linux-x86_64-0.13.0.tar.xz
-export PATH=$PATH:$(pwd)/zig-linux-x86_64-0.13.0
-```
-
-Or use a package manager like `snap`:
-```bash
-snap install zig --classic --beta
-```
-
-### Via Package Managers
-- **Homebrew (macOS)**: `brew install zig`
-- **Arch Linux**: `pacman -S zig`
-- **Fedora**: `dnf install zig`
-
-See [ziglang.org/download](https://ziglang.org/download/) for more options.
-
 ## License
 
 MIT
