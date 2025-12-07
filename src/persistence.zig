@@ -17,24 +17,172 @@ pub const EventJson = struct {
 };
 
 pub fn writeEvents(allocator: std.mem.Allocator, file_path: []const u8, events: []const Event) !void {
-    _ = allocator;
-    _ = file_path;
-    _ = events;
-    // Persistence disabled for now
+    // Ensure directory exists
+    if (std.mem.lastIndexOfScalar(u8, file_path, '/')) |last_slash| {
+        const dir_path = file_path[0..last_slash];
+        std.fs.cwd().makePath(dir_path) catch |err| {
+            if (err != error.PathAlreadyExists) return err;
+        };
+    }
+
+    // Open file for appending (create if doesn't exist)
+    const file = std.fs.cwd().openFile(file_path, .{ .mode = .write_only }) catch |err| {
+        if (err == error.FileNotFound) {
+            const new_file = try std.fs.cwd().createFile(file_path, .{});
+            defer new_file.close();
+
+            for (events) |event| {
+                const json_line = try serializeEvent(allocator, event);
+                defer allocator.free(json_line);
+                try new_file.writeAll(json_line);
+                try new_file.writeAll("\n");
+            }
+            return;
+        }
+        return err;
+    };
+    defer file.close();
+
+    // Seek to end of file to append
+    try file.seekFromEnd(0);
+
+    for (events) |event| {
+        const json_line = try serializeEvent(allocator, event);
+        defer allocator.free(json_line);
+        try file.writeAll(json_line);
+        try file.writeAll("\n");
+    }
 }
 
 fn serializeEvent(allocator: std.mem.Allocator, event: Event) ![]u8 {
-    _ = event;
-    _ = allocator;
-    // Simplified for now - JSON serialization API changed in Zig 0.15
-    return error.NotImplemented;
+    var list = ArrayList(u8).init(allocator);
+    errdefer list.deinit();
+
+    switch (event) {
+        .auction_added => |e| {
+            try list.appendSlice("{\"$type\":\"auction_added\",\"at\":");
+            try std.fmt.format(list.writer(), "{d}", .{e.at});
+            try list.appendSlice(",\"auction\":");
+            try serializeAuction(&list, e.auction);
+            try list.append('}');
+        },
+        .bid_accepted => |e| {
+            try list.appendSlice("{\"$type\":\"bid_accepted\",\"at\":");
+            try std.fmt.format(list.writer(), "{d}", .{e.at});
+            try list.appendSlice(",\"bid\":");
+            try serializeBid(&list, e.bid);
+            try list.append('}');
+        },
+    }
+
+    return list.toOwnedSlice();
+}
+
+fn serializeAuction(list: *ArrayList(u8), auction: Auction) !void {
+    try list.appendSlice("{\"id\":");
+    try std.fmt.format(list.writer(), "{d}", .{auction.id});
+    try list.appendSlice(",\"starts_at\":");
+    try std.fmt.format(list.writer(), "{d}", .{auction.starts_at});
+    try list.appendSlice(",\"title\":\"");
+    try list.appendSlice(auction.title);
+    try list.appendSlice("\",\"expiry\":");
+    try std.fmt.format(list.writer(), "{d}", .{auction.expiry});
+    try list.appendSlice(",\"seller\":\"");
+    try serializeUser(list, auction.seller);
+    try list.appendSlice("\",\"typ\":\"");
+    try serializeAuctionType(list, auction.typ);
+    try list.appendSlice("\",\"currency\":\"");
+    try list.appendSlice(@tagName(auction.currency));
+    try list.appendSlice("\"}");
+}
+
+fn serializeBid(list: *ArrayList(u8), bid: Bid) !void {
+    try list.appendSlice("{\"auction_id\":");
+    try std.fmt.format(list.writer(), "{d}", .{bid.auction_id});
+    try list.appendSlice(",\"bidder\":\"");
+    try serializeUser(list, bid.bidder);
+    try list.appendSlice("\",\"at\":");
+    try std.fmt.format(list.writer(), "{d}", .{bid.at});
+    try list.appendSlice(",\"amount\":");
+    try std.fmt.format(list.writer(), "{d}", .{bid.amount});
+    try list.append('}');
+}
+
+fn serializeUser(list: *ArrayList(u8), user: models.User) !void {
+    switch (user) {
+        .buyer_or_seller => |u| {
+            try list.appendSlice("BuyerOrSeller|");
+            try list.appendSlice(u.user_id);
+            try list.append('|');
+            try list.appendSlice(u.name);
+        },
+        .support => |u| {
+            try list.appendSlice("Support|");
+            try list.appendSlice(u.user_id);
+        },
+    }
+}
+
+fn serializeAuctionType(list: *ArrayList(u8), typ: models.AuctionType) !void {
+    switch (typ) {
+        .timed_ascending => |opts| {
+            try std.fmt.format(list.writer(), "English|{d}|{d}|{d}", .{
+                opts.reserve_price,
+                opts.min_raise,
+                opts.time_frame_seconds,
+            });
+        },
+    }
 }
 
 pub fn readEvents(allocator: std.mem.Allocator, file_path: []const u8) ![]Event {
-    _ = allocator;
-    _ = file_path;
-    // Persistence disabled for now
-    return &[_]Event{};
+    // Check if file exists
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            // If file doesn't exist, return empty slice
+            return &[_]Event{};
+        }
+        return err;
+    };
+    defer file.close();
+
+    const file_content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024); // 10MB max
+
+    var events = ArrayList(Event).init(allocator);
+    errdefer {
+        for (events.items) |event| {
+            event.deinit(allocator);
+        }
+        events.deinit();
+    }
+
+    var parsed_values = ArrayList(json.Parsed(json.Value)).init(allocator);
+
+    var line_it = std.mem.splitScalar(u8, file_content, '\n');
+    while (line_it.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+        if (trimmed.len == 0) continue;
+
+        const parsed = try json.parseFromSlice(json.Value, allocator, trimmed, .{
+            .allocate = .alloc_always,
+        });
+        errdefer parsed.deinit();
+        try parsed_values.append(parsed);
+
+        const event = try parseEvent(allocator, parsed.value);
+        try events.append(event);
+    }
+
+    // Now we can free file_content since we've duplicated all strings
+    allocator.free(file_content);
+
+    // Clean up parsed values
+    for (parsed_values.items) |parsed| {
+        parsed.deinit();
+    }
+    parsed_values.deinit();
+
+    return events.toOwnedSlice();
 }
 
 fn parseEvent(allocator: std.mem.Allocator, value: json.Value) !Event {
@@ -42,7 +190,11 @@ fn parseEvent(allocator: std.mem.Allocator, value: json.Value) !Event {
     const typ = obj.get("$type") orelse return error.MissingType;
     const typ_str = typ.string;
     const at_value = obj.get("at") orelse return error.MissingAt;
-    const at = @as(i64, @intFromFloat(at_value.float));
+    const at = switch (at_value) {
+        .integer => |i| i,
+        .float => |f| @as(i64, @intFromFloat(f)),
+        else => return error.InvalidAt,
+    };
 
     if (std.mem.eql(u8, typ_str, "auction_added")) {
         const auction_value = obj.get("auction") orelse return error.MissingAuction;
@@ -69,10 +221,25 @@ fn parseEvent(allocator: std.mem.Allocator, value: json.Value) !Event {
 
 fn parseAuction(allocator: std.mem.Allocator, value: json.Value) !Auction {
     const obj = value.object;
-    const id = @as(i64, @intFromFloat(obj.get("id").?.float));
-    const starts_at = @as(i64, @intFromFloat(obj.get("starts_at").?.float));
+    const id_value = obj.get("id").?;
+    const id = switch (id_value) {
+        .integer => |i| i,
+        .float => |f| @as(i64, @intFromFloat(f)),
+        else => return error.InvalidId,
+    };
+    const starts_at_value = obj.get("starts_at").?;
+    const starts_at = switch (starts_at_value) {
+        .integer => |i| i,
+        .float => |f| @as(i64, @intFromFloat(f)),
+        else => return error.InvalidStartsAt,
+    };
     const title = obj.get("title").?.string;
-    const expiry = @as(i64, @intFromFloat(obj.get("expiry").?.float));
+    const expiry_value = obj.get("expiry").?;
+    const expiry = switch (expiry_value) {
+        .integer => |i| i,
+        .float => |f| @as(i64, @intFromFloat(f)),
+        else => return error.InvalidExpiry,
+    };
     const seller = try parseUser(allocator, obj.get("seller").?);
     const typ = try parseAuctionType(obj.get("typ").?);
     const currency = try parseCurrency(obj.get("currency").?.string);
@@ -90,10 +257,25 @@ fn parseAuction(allocator: std.mem.Allocator, value: json.Value) !Auction {
 
 fn parseBid(allocator: std.mem.Allocator, value: json.Value) !Bid {
     const obj = value.object;
-    const auction_id = @as(i64, @intFromFloat(obj.get("auction_id").?.float));
+    const auction_id_value = obj.get("auction_id").?;
+    const auction_id = switch (auction_id_value) {
+        .integer => |i| i,
+        .float => |f| @as(i64, @intFromFloat(f)),
+        else => return error.InvalidAuctionId,
+    };
     const bidder = try parseUser(allocator, obj.get("bidder").?);
-    const at = @as(i64, @intFromFloat(obj.get("at").?.float));
-    const amount = @as(i64, @intFromFloat(obj.get("amount").?.float));
+    const at_value = obj.get("at").?;
+    const at = switch (at_value) {
+        .integer => |i| i,
+        .float => |f| @as(i64, @intFromFloat(f)),
+        else => return error.InvalidAt,
+    };
+    const amount_value = obj.get("amount").?;
+    const amount = switch (amount_value) {
+        .integer => |i| i,
+        .float => |f| @as(i64, @intFromFloat(f)),
+        else => return error.InvalidAmount,
+    };
 
     return Bid{
         .auction_id = auction_id,
@@ -153,6 +335,43 @@ fn parseCurrency(str: []const u8) !models.Currency {
     return std.meta.stringToEnum(models.Currency, str) orelse error.InvalidCurrency;
 }
 
+fn duplicateAuction(allocator: std.mem.Allocator, auction: Auction) !Auction {
+    return Auction{
+        .id = auction.id,
+        .starts_at = auction.starts_at,
+        .title = try allocator.dupe(u8, auction.title),
+        .expiry = auction.expiry,
+        .seller = try duplicateUser(allocator, auction.seller),
+        .typ = auction.typ,
+        .currency = auction.currency,
+    };
+}
+
+fn duplicateUser(allocator: std.mem.Allocator, user: models.User) !models.User {
+    return switch (user) {
+        .buyer_or_seller => |u| models.User{
+            .buyer_or_seller = .{
+                .user_id = try allocator.dupe(u8, u.user_id),
+                .name = try allocator.dupe(u8, u.name),
+            },
+        },
+        .support => |u| models.User{
+            .support = .{
+                .user_id = try allocator.dupe(u8, u.user_id),
+            },
+        },
+    };
+}
+
+fn duplicateBid(allocator: std.mem.Allocator, bid: Bid) !Bid {
+    return Bid{
+        .auction_id = bid.auction_id,
+        .bidder = try duplicateUser(allocator, bid.bidder),
+        .at = bid.at,
+        .amount = bid.amount,
+    };
+}
+
 pub fn eventsToRepository(allocator: std.mem.Allocator, events: []const Event) !domain.Repository {
     var repository = domain.Repository.init(allocator);
     errdefer repository.deinit();
@@ -160,15 +379,17 @@ pub fn eventsToRepository(allocator: std.mem.Allocator, events: []const Event) !
     for (events) |event| {
         switch (event) {
             .auction_added => |e| {
-                const empty_state = AuctionState.initEmpty(allocator, e.auction);
-                try repository.put(e.auction.id, .{
-                    .auction = e.auction,
+                const auction_copy = try duplicateAuction(allocator, e.auction);
+                const empty_state = AuctionState.initEmpty(allocator, auction_copy);
+                try repository.put(auction_copy.id, .{
+                    .auction = auction_copy,
                     .state = empty_state,
                 });
             },
             .bid_accepted => |e| {
                 var entry = repository.getPtr(e.bid.auction_id) orelse continue;
-                try domain.addBidToState(allocator, e.bid, &entry.state);
+                const bid_copy = try duplicateBid(allocator, e.bid);
+                try domain.addBidToState(allocator, bid_copy, &entry.state);
             },
         }
     }
