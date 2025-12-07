@@ -66,6 +66,39 @@ fn updateStateWithTime(allocator: std.mem.Allocator, state: AuctionState, now: i
             return state;
         },
         .has_ended => return state,
+        .sealed_bid_awaiting_start => |s| {
+            if (now > s.start_time and now < s.expiry) {
+                return AuctionState{
+                    .sealed_bid_ongoing = .{
+                        .bids = ArrayList(Bid).init(allocator),
+                        .expiry = s.expiry,
+                        .options = s.options,
+                    },
+                };
+            } else if (now >= s.expiry) {
+                return AuctionState{
+                    .sealed_bid_disclosing = .{
+                        .bids = ArrayList(Bid).init(allocator),
+                        .expiry = s.expiry,
+                        .options = s.options,
+                    },
+                };
+            }
+            return state;
+        },
+        .sealed_bid_ongoing => |s| {
+            if (now >= s.expiry) {
+                return AuctionState{
+                    .sealed_bid_disclosing = .{
+                        .bids = s.bids,
+                        .expiry = s.expiry,
+                        .options = s.options,
+                    },
+                };
+            }
+            return state;
+        },
+        .sealed_bid_disclosing => return state,
     }
 }
 
@@ -98,6 +131,13 @@ pub fn addBidToState(allocator: std.mem.Allocator, bid: Bid, state: *AuctionStat
             }
         },
         .has_ended => return AuctionError.AuctionHasEnded,
+        .sealed_bid_awaiting_start => return AuctionError.AuctionHasNotStarted,
+        .sealed_bid_ongoing => |*s| {
+            // For sealed bid auctions, bids are accepted without revealing them
+            // No minimum bid check, just add the bid
+            try s.bids.append(bid);
+        },
+        .sealed_bid_disclosing => return AuctionError.AuctionHasEnded,
     }
 }
 
@@ -161,6 +201,9 @@ pub fn getBids(state: AuctionState) []const Bid {
         .awaiting_start => return &[_]Bid{},
         .ongoing => |s| return s.bids.items,
         .has_ended => |s| return s.bids.items,
+        .sealed_bid_awaiting_start => return &[_]Bid{},
+        .sealed_bid_ongoing => return &[_]Bid{}, // Bids are hidden until disclosing
+        .sealed_bid_disclosing => |s| return s.bids.items,
     }
 }
 
@@ -178,6 +221,30 @@ pub fn getWinnerAndPrice(state: AuctionState) ?struct { amount: i64, winner: []c
             }
             return null;
         },
+        .sealed_bid_disclosing => |s| {
+            if (s.bids.items.len > 0) {
+                // Find the highest bid
+                var highest_bid = s.bids.items[0];
+                for (s.bids.items[1..]) |bid| {
+                    if (bid.amount > highest_bid.amount) {
+                        highest_bid = bid;
+                    }
+                }
+                if (highest_bid.amount >= s.options.reserve_price) {
+                    return .{
+                        .amount = highest_bid.amount,
+                        .winner = highest_bid.bidder.userId(),
+                    };
+                }
+            }
+            return null;
+        },
         else => return null,
     }
+}
+
+// Advance state with time - useful for testing
+pub fn advanceTime(allocator: std.mem.Allocator, state: *AuctionState, now: i64) !void {
+    const updated_state = try updateStateWithTime(allocator, state.*, now);
+    state.* = updated_state;
 }

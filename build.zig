@@ -49,12 +49,43 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const blind_auction_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/blind_auction_state_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    const english_auction_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/english_auction_state_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    // Serialization tests temporarily disabled due to Zig 0.15 JSON API changes
+    // const english_auction_serialization_tests = b.addTest(.{
+    //     .root_module = b.createModule(.{
+    //         .root_source_file = b.path("src/english_auction_serialization_test.zig"),
+    //         .target = target,
+    //         .optimize = optimize,
+    //     }),
+    // });
+
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_persistence_tests = b.addRunArtifact(persistence_tests);
     const run_api_tests = b.addRunArtifact(api_tests);
+    const run_blind_auction_tests = b.addRunArtifact(blind_auction_tests);
+    const run_english_auction_tests = b.addRunArtifact(english_auction_tests);
+    // const run_english_auction_serialization_tests = b.addRunArtifact(english_auction_serialization_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_persistence_tests.step);
     test_step.dependOn(&run_api_tests.step);
+    test_step.dependOn(&run_blind_auction_tests.step);
+    test_step.dependOn(&run_english_auction_tests.step);
+    // test_step.dependOn(&run_english_auction_serialization_tests.step);
 }

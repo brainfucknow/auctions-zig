@@ -105,6 +105,15 @@ pub const AuctionError = error{
     OutOfMemory,
 };
 
+pub const SealedBidType = enum {
+    blind,
+    vickrey,
+
+    pub fn jsonStringify(self: SealedBidType, jw: anytype) !void {
+        try jw.write(@tagName(self));
+    }
+};
+
 pub const AuctionTypeOptions = struct {
     reserve_price: i64 = 0,
     min_raise: i64 = 0,
@@ -137,12 +146,25 @@ pub const AuctionTypeOptions = struct {
     }
 };
 
+pub const SingleSealedBidOptions = struct {
+    reserve_price: i64 = 0,
+    sealed_bid_type: SealedBidType,
+
+    pub fn jsonStringify(self: SingleSealedBidOptions, jw: anytype) !void {
+        var buffer: [256]u8 = undefined;
+        const str = try std.fmt.bufPrint(&buffer, "SingleSealedBid|{s}|{d}", .{ @tagName(self.sealed_bid_type), self.reserve_price });
+        try jw.write(str);
+    }
+};
+
 pub const AuctionType = union(enum) {
     timed_ascending: AuctionTypeOptions,
+    single_sealed_bid: SingleSealedBidOptions,
 
     pub fn jsonStringify(self: AuctionType, jw: anytype) !void {
         switch (self) {
             .timed_ascending => |opts| try opts.jsonStringify(jw),
+            .single_sealed_bid => |opts| try opts.jsonStringify(jw),
         }
     }
 
@@ -239,19 +261,45 @@ pub const AuctionState = union(enum) {
         expiry: i64,
         options: AuctionTypeOptions,
     },
+    // Sealed bid auction states
+    sealed_bid_awaiting_start: struct {
+        start_time: i64,
+        expiry: i64,
+        options: SingleSealedBidOptions,
+    },
+    sealed_bid_ongoing: struct {
+        bids: ArrayList(Bid),
+        expiry: i64,
+        options: SingleSealedBidOptions,
+    },
+    sealed_bid_disclosing: struct {
+        bids: ArrayList(Bid),
+        expiry: i64,
+        options: SingleSealedBidOptions,
+    },
 
     pub fn initEmpty(allocator: std.mem.Allocator, auction: Auction) AuctionState {
-        const opts = switch (auction.typ) {
-            .timed_ascending => |o| o,
-        };
         _ = allocator;
-        return AuctionState{
-            .awaiting_start = .{
-                .start_time = auction.starts_at,
-                .expiry = auction.expiry,
-                .options = opts,
+        switch (auction.typ) {
+            .timed_ascending => |opts| {
+                return AuctionState{
+                    .awaiting_start = .{
+                        .start_time = auction.starts_at,
+                        .expiry = auction.expiry,
+                        .options = opts,
+                    },
+                };
             },
-        };
+            .single_sealed_bid => |opts| {
+                return AuctionState{
+                    .sealed_bid_awaiting_start = .{
+                        .start_time = auction.starts_at,
+                        .expiry = auction.expiry,
+                        .options = opts,
+                    },
+                };
+            },
+        }
     }
 
     pub fn deinit(self: *AuctionState, allocator: std.mem.Allocator) void {
@@ -264,6 +312,19 @@ pub const AuctionState = union(enum) {
                 state.bids.deinit();
             },
             .has_ended => |*state| {
+                for (state.bids.items) |bid| {
+                    bid.deinit(allocator);
+                }
+                state.bids.deinit();
+            },
+            .sealed_bid_awaiting_start => {},
+            .sealed_bid_ongoing => |*state| {
+                for (state.bids.items) |bid| {
+                    bid.deinit(allocator);
+                }
+                state.bids.deinit();
+            },
+            .sealed_bid_disclosing => |*state| {
                 for (state.bids.items) |bid| {
                     bid.deinit(allocator);
                 }
