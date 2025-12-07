@@ -165,6 +165,33 @@ pub const Auction = struct {
         allocator.free(self.title);
         self.seller.deinit(allocator);
     }
+
+    pub fn jsonStringify(self: Auction, jws: anytype) !void {
+        try jws.beginObject();
+
+        try jws.objectField("id");
+        try jws.write(self.id);
+
+        try jws.objectField("starts_at");
+        try jws.write(self.starts_at);
+
+        try jws.objectField("title");
+        try jws.write(self.title);
+
+        try jws.objectField("expiry");
+        try jws.write(self.expiry);
+
+        try jws.objectField("seller");
+        try self.seller.jsonStringify(jws);
+
+        try jws.objectField("typ");
+        try self.typ.jsonStringify(jws);
+
+        try jws.objectField("currency");
+        try self.currency.jsonStringify(jws);
+
+        try jws.endObject();
+    }
 };
 
 pub const Bid = struct {
@@ -175,6 +202,24 @@ pub const Bid = struct {
 
     pub fn deinit(self: Bid, allocator: std.mem.Allocator) void {
         self.bidder.deinit(allocator);
+    }
+
+    pub fn jsonStringify(self: Bid, jws: anytype) !void {
+        try jws.beginObject();
+
+        try jws.objectField("auction_id");
+        try jws.write(self.auction_id);
+
+        try jws.objectField("bidder");
+        try self.bidder.jsonStringify(jws);
+
+        try jws.objectField("at");
+        try jws.write(self.at);
+
+        try jws.objectField("amount");
+        try jws.write(self.amount);
+
+        try jws.endObject();
     }
 };
 

@@ -55,84 +55,39 @@ pub fn writeEvents(allocator: std.mem.Allocator, file_path: []const u8, events: 
 }
 
 fn serializeEvent(allocator: std.mem.Allocator, event: Event) ![]u8 {
-    var list = ArrayList(u8).init(allocator);
-    errdefer list.deinit();
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    var jws: json.Stringify = .{
+        .writer = &out.writer,
+        .options = .{},
+    };
 
     switch (event) {
         .auction_added => |e| {
-            try list.appendSlice("{\"$type\":\"auction_added\",\"at\":");
-            try std.fmt.format(list.writer(), "{d}", .{e.at});
-            try list.appendSlice(",\"auction\":");
-            try serializeAuction(&list, e.auction);
-            try list.append('}');
+            try jws.beginObject();
+            try jws.objectField("$type");
+            try jws.write("auction_added");
+            try jws.objectField("at");
+            try jws.write(e.at);
+            try jws.objectField("auction");
+            try e.auction.jsonStringify(&jws);
+            try jws.endObject();
         },
         .bid_accepted => |e| {
-            try list.appendSlice("{\"$type\":\"bid_accepted\",\"at\":");
-            try std.fmt.format(list.writer(), "{d}", .{e.at});
-            try list.appendSlice(",\"bid\":");
-            try serializeBid(&list, e.bid);
-            try list.append('}');
+            try jws.beginObject();
+            try jws.objectField("$type");
+            try jws.write("bid_accepted");
+            try jws.objectField("at");
+            try jws.write(e.at);
+            try jws.objectField("bid");
+            try e.bid.jsonStringify(&jws);
+            try jws.endObject();
         },
     }
 
-    return list.toOwnedSlice();
-}
-
-fn serializeAuction(list: *ArrayList(u8), auction: Auction) !void {
-    try list.appendSlice("{\"id\":");
-    try std.fmt.format(list.writer(), "{d}", .{auction.id});
-    try list.appendSlice(",\"starts_at\":");
-    try std.fmt.format(list.writer(), "{d}", .{auction.starts_at});
-    try list.appendSlice(",\"title\":\"");
-    try list.appendSlice(auction.title);
-    try list.appendSlice("\",\"expiry\":");
-    try std.fmt.format(list.writer(), "{d}", .{auction.expiry});
-    try list.appendSlice(",\"seller\":\"");
-    try serializeUser(list, auction.seller);
-    try list.appendSlice("\",\"typ\":\"");
-    try serializeAuctionType(list, auction.typ);
-    try list.appendSlice("\",\"currency\":\"");
-    try list.appendSlice(@tagName(auction.currency));
-    try list.appendSlice("\"}");
-}
-
-fn serializeBid(list: *ArrayList(u8), bid: Bid) !void {
-    try list.appendSlice("{\"auction_id\":");
-    try std.fmt.format(list.writer(), "{d}", .{bid.auction_id});
-    try list.appendSlice(",\"bidder\":\"");
-    try serializeUser(list, bid.bidder);
-    try list.appendSlice("\",\"at\":");
-    try std.fmt.format(list.writer(), "{d}", .{bid.at});
-    try list.appendSlice(",\"amount\":");
-    try std.fmt.format(list.writer(), "{d}", .{bid.amount});
-    try list.append('}');
-}
-
-fn serializeUser(list: *ArrayList(u8), user: models.User) !void {
-    switch (user) {
-        .buyer_or_seller => |u| {
-            try list.appendSlice("BuyerOrSeller|");
-            try list.appendSlice(u.user_id);
-            try list.append('|');
-            try list.appendSlice(u.name);
-        },
-        .support => |u| {
-            try list.appendSlice("Support|");
-            try list.appendSlice(u.user_id);
-        },
-    }
-}
-
-fn serializeAuctionType(list: *ArrayList(u8), typ: models.AuctionType) !void {
-    switch (typ) {
-        .timed_ascending => |opts| {
-            try std.fmt.format(list.writer(), "English|{d}|{d}|{d}", .{
-                opts.reserve_price,
-                opts.min_raise,
-                opts.time_frame_seconds,
-            });
-        },
-    }
+    var array_list = out.toArrayList();
+    return try array_list.toOwnedSlice(allocator);
 }
 
 pub fn readEvents(allocator: std.mem.Allocator, file_path: []const u8) ![]Event {
