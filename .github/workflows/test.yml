@@ -29,3 +29,29 @@ jobs:
 
     - name: Build project
       run: zig build
+
+  coverage:
+    name: Test with coverage
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        zig-version: ['0.15.2']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v2
+      with:
+        version: ${{ matrix.zig-version }}
+
+    - name: Run tests with coverage
+      run: |
+        kcov --exclude-pattern=/snap/,/usr/ coverage zig build test
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage/cobertura.xml
