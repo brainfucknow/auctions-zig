@@ -41,10 +41,20 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const api_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/api_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_persistence_tests = b.addRunArtifact(persistence_tests);
+    const run_api_tests = b.addRunArtifact(api_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_persistence_tests.step);
+    test_step.dependOn(&run_api_tests.step);
 }

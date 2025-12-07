@@ -55,7 +55,6 @@ pub fn handleRequest(
     jwt_payload: ?[]const u8,
     body: []const u8,
 ) ![]u8 {
-    _ = body;
 
     if (method == .GET and std.mem.eql(u8, path, "/auctions")) {
         return try getAuctionsHandler(allocator, state);
@@ -74,7 +73,7 @@ pub fn handleRequest(
     if (method == .POST and std.mem.eql(u8, path, "/auctions")) {
         const user = try authenticateRequest(allocator, jwt_payload);
         defer user.deinit(allocator);
-        return try createAuctionHandler(allocator, state, user);
+        return try createAuctionHandler(allocator, state, user, body);
     }
 
     if (method == .POST and std.mem.startsWith(u8, path, "/auctions/")) {
@@ -88,7 +87,7 @@ pub fn handleRequest(
             };
             const user = try authenticateRequest(allocator, jwt_payload);
             defer user.deinit(allocator);
-            return try createBidHandler(allocator, state, auction_id, user);
+            return try createBidHandler(allocator, state, auction_id, user, body);
         }
     }
 
@@ -98,6 +97,57 @@ pub fn handleRequest(
 fn authenticateRequest(allocator: std.mem.Allocator, jwt_payload: ?[]const u8) !User {
     const payload = jwt_payload orelse return error.Unauthorized;
     return try jwt.decodeJwtUser(allocator, payload);
+}
+
+fn formatUser(writer: anytype, user: User) !void {
+    switch (user) {
+        .buyer_or_seller => |u| {
+            try writer.print("BuyerOrSeller|{s}|{s}", .{ u.user_id, u.name });
+        },
+        .support => |u| {
+            try writer.print("Support|{s}", .{u.user_id});
+        },
+    }
+}
+
+fn formatIso8601(writer: anytype, timestamp: i64) !void {
+    // Simple ISO 8601 formatting: "YYYY-MM-DDTHH:MM:SSZ"
+    // For simplicity, we'll use basic math (not handling leap years perfectly)
+    const seconds = @mod(timestamp, 60);
+    const minutes = @mod(@divFloor(timestamp, 60), 60);
+    const hours = @mod(@divFloor(timestamp, 3600), 24);
+    const days_since_epoch = @divFloor(timestamp, 86400);
+
+    const year: i64 = 1970 + @divFloor(days_since_epoch, 365);
+    const day_of_year = @mod(days_since_epoch, 365);
+    const month: i64 = @min(12, @divFloor(day_of_year, 30) + 1);
+    const day: i64 = @mod(day_of_year, 30) + 1;
+
+    try writer.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+        year, month, day, hours, minutes, seconds
+    });
+}
+
+fn parseTimestamp(iso_string: []const u8) !i64 {
+    // Parse ISO 8601 format: "2018-01-01T10:00:00.000Z" or "2018-01-01T10:00:00Z"
+    // For simplicity, we'll use a basic parser
+    // Format: YYYY-MM-DDTHH:MM:SS.sssZ or YYYY-MM-DDTHH:MM:SSZ
+
+    if (iso_string.len < 19) return error.InvalidTimestamp;
+
+    const year = try std.fmt.parseInt(i32, iso_string[0..4], 10);
+    const month = try std.fmt.parseInt(u4, iso_string[5..7], 10);
+    const day = try std.fmt.parseInt(u5, iso_string[8..10], 10);
+    const hour = try std.fmt.parseInt(u5, iso_string[11..13], 10);
+    const minute = try std.fmt.parseInt(u6, iso_string[14..16], 10);
+    const second = try std.fmt.parseInt(u6, iso_string[17..19], 10);
+
+    // Simple epoch calculation (approximate, ignoring leap years/seconds for simplicity)
+    const days_since_epoch = @as(i64, year - 1970) * 365 + @divFloor(@as(i64, year - 1969), 4) +
+        @as(i64, month - 1) * 30 + @as(i64, day - 1);
+
+    const seconds = days_since_epoch * 86400 + @as(i64, hour) * 3600 + @as(i64, minute) * 60 + @as(i64, second);
+    return seconds;
 }
 
 fn getAuctionsHandler(allocator: std.mem.Allocator, state: *AppState) ![]u8 {
@@ -158,9 +208,11 @@ fn getAuctionHandler(allocator: std.mem.Allocator, state: *AppState, auction_id:
 
     for (bids, 0..) |bid, i| {
         if (i > 0) try writer.writeAll(",");
-        try writer.print(
-            \\{{"amount":{d},"bidder":"{s}"}}
-        , .{ bid.amount, bid.bidder.userId() });
+        try writer.writeAll("{\"amount\":");
+        try writer.print("{d}", .{bid.amount});
+        try writer.writeAll(",\"bidder\":\"");
+        try formatUser(writer, bid.bidder);
+        try writer.writeAll("\"}");
     }
 
     try writer.writeAll("]");
@@ -177,13 +229,27 @@ fn getAuctionHandler(allocator: std.mem.Allocator, state: *AppState, auction_id:
     return list.toOwnedSlice();
 }
 
-fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: User) ![]u8 {
-    // For now, hardcoded auction for testing
-    const id: i64 = 1;
-    const starts_at = std.time.timestamp();
-    const title = "Test Auction";
-    const ends_at = starts_at + 86400;
-    const currency = models.Currency.VAC;
+fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: User, body: []const u8) ![]u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch {
+        return try jsonError(allocator, "Invalid JSON");
+    };
+    defer parsed.deinit();
+
+    const obj = parsed.value.object;
+
+    const id = if (obj.get("id")) |v| blk: {
+        break :blk switch (v) {
+            .integer => |i| i,
+            .float => |f| @as(i64, @intFromFloat(f)),
+            else => return try jsonError(allocator, "Invalid id type"),
+        };
+    } else return try jsonError(allocator, "Missing id");
+    const starts_at = if (obj.get("startsAt")) |v| try parseTimestamp(v.string) else return try jsonError(allocator, "Missing startsAt");
+    const ends_at = if (obj.get("endsAt")) |v| try parseTimestamp(v.string) else return try jsonError(allocator, "Missing endsAt");
+    const title = if (obj.get("title")) |v| v.string else return try jsonError(allocator, "Missing title");
+    const currency_str = if (obj.get("currency")) |v| v.string else return try jsonError(allocator, "Missing currency");
+
+    const currency = std.meta.stringToEnum(models.Currency, currency_str) orelse return try jsonError(allocator, "Invalid currency");
 
     const typ = models.AuctionType{
         .timed_ascending = .{
@@ -202,6 +268,7 @@ fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: Us
         .typ = typ,
         .currency = currency,
     };
+    errdefer auction.deinit(allocator);
 
     const now = std.time.timestamp();
     const command = Command{
@@ -226,12 +293,27 @@ fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: Us
             const writer = response.writer();
 
             try writer.print(
-                \\{{"$type":"auction_added","at":{d},"auction":{{"id":{d},"starts_at":{d},"title":"{s}","expiry":{d}}}}}
-            , .{ now, id, starts_at, title, ends_at });
+                \\{{"$type":"AuctionAdded","at":"
+            , .{});
+            try formatIso8601(writer, now);
+            try writer.print(
+                \\","auction":{{"id":{d},"startsAt":"
+            , .{id});
+            try formatIso8601(writer, starts_at);
+            try writer.print(
+                \\","title":"{s}","expiry":"
+            , .{title});
+            try formatIso8601(writer, ends_at);
+            try writer.print(
+                \\","user":"{s}","type":"English|0|0|0","currency":"{s}"}}}}
+            , .{ user.userId(), @tagName(currency) });
 
             return response.toOwnedSlice();
         },
         .failure => |err| {
+            if (err == error.AuctionAlreadyExists) {
+                return error.AuctionAlreadyExists;
+            }
             return try jsonError(allocator, @errorName(err));
         },
     }
@@ -242,9 +324,21 @@ fn createBidHandler(
     state: *AppState,
     auction_id: i64,
     user: User,
+    body: []const u8,
 ) ![]u8 {
-    // For now, hardcoded bid amount for testing
-    const amount: i64 = 100;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch {
+        return try jsonError(allocator, "Invalid JSON");
+    };
+    defer parsed.deinit();
+
+    const obj = parsed.value.object;
+    const amount = if (obj.get("amount")) |v| blk: {
+        break :blk switch (v) {
+            .integer => |i| i,
+            .float => |f| @as(i64, @intFromFloat(f)),
+            else => return try jsonError(allocator, "Invalid amount type"),
+        };
+    } else return try jsonError(allocator, "Missing amount");
 
     const now = std.time.timestamp();
     const bid = Bid{
@@ -253,6 +347,7 @@ fn createBidHandler(
         .at = now,
         .amount = amount,
     };
+    errdefer bid.deinit(allocator);
 
     const command = Command{
         .place_bid = .{
@@ -276,12 +371,21 @@ fn createBidHandler(
             const writer = response.writer();
 
             try writer.print(
-                \\{{"$type":"bid_accepted","at":{d},"bid":{{"auction_id":{d},"amount":{d}}}}}
-            , .{ now, auction_id, amount });
+                \\{{"$type":"BidAccepted","at":"
+            , .{});
+            try formatIso8601(writer, now);
+            try writer.print(
+                \\","bid":{{"auction":{d},"user":"{s}","amount":{d},"at":"
+            , .{ auction_id, user.userId(), amount });
+            try formatIso8601(writer, now);
+            try writer.writeAll("\"}}");
 
             return response.toOwnedSlice();
         },
         .failure => |err| {
+            if (err == error.UnknownAuction) {
+                return error.UnknownAuction;
+            }
             return try jsonError(allocator, @errorName(err));
         },
     }
