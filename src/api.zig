@@ -3,6 +3,7 @@ const models = @import("models.zig");
 const domain = @import("domain.zig");
 const jwt = @import("jwt.zig");
 const persistence = @import("persistence.zig");
+const zdt = @import("zdt");
 const ArrayList = std.array_list.Managed;
 
 const Auction = models.Auction;
@@ -169,47 +170,31 @@ fn formatUser(writer: anytype, user: User) !void {
 }
 
 fn formatIso8601(writer: anytype, timestamp: i64) !void {
-    // ISO 8601 formatting: "YYYY-MM-DDTHH:MM:SSZ"
-    const seconds = @mod(timestamp, 60);
-    const minutes = @mod(@divFloor(timestamp, 60), 60);
-    const hours = @mod(@divFloor(timestamp, 3600), 24);
-    var days_since_epoch = @divFloor(timestamp, 86400);
-
-    // Calculate year accounting for leap years
-    var year: i64 = 1970;
-    while (true) {
-        const days_in_year: i64 = if (isLeapYear(year)) 366 else 365;
-        if (days_since_epoch < days_in_year) break;
-        days_since_epoch -= days_in_year;
-        year += 1;
+    // Use zdt to format Unix timestamp to ISO 8601
+    const dt = try zdt.Datetime.fromUnix(timestamp, zdt.Duration.Resolution.second, null);
+    // Format to ISO 8601 with Z suffix
+    // Handle year sign: only output '-' for negative years, no sign for positive
+    if (dt.year < 0) {
+        const abs_year: u32 = @intCast(-dt.year);
+        try writer.print("-{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+            abs_year,
+            dt.month,
+            dt.day,
+            dt.hour,
+            dt.minute,
+            dt.second,
+        });
+    } else {
+        const pos_year: u32 = @intCast(dt.year);
+        try writer.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+            pos_year,
+            dt.month,
+            dt.day,
+            dt.hour,
+            dt.minute,
+            dt.second,
+        });
     }
-
-    // Calculate month and day
-    const month_lengths = if (isLeapYear(year))
-        [_]i64{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
-    else
-        [_]i64{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-
-    var month: i64 = 1;
-    for (month_lengths) |days_in_month| {
-        if (days_since_epoch < days_in_month) break;
-        days_since_epoch -= days_in_month;
-        month += 1;
-    }
-    const day = days_since_epoch + 1;
-
-    try writer.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
-        @as(u64, @intCast(year)),
-        @as(u8, @intCast(month)),
-        @as(u8, @intCast(day)),
-        @as(u8, @intCast(hours)),
-        @as(u8, @intCast(minutes)),
-        @as(u8, @intCast(seconds)),
-    });
-}
-
-fn isLeapYear(year: i64) bool {
-    return (@mod(year, 4) == 0 and @mod(year, 100) != 0) or (@mod(year, 400) == 0);
 }
 
 fn formatIso8601Alloc(allocator: std.mem.Allocator, timestamp: i64) ![]u8 {
@@ -235,43 +220,10 @@ fn jsonStringifyAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
 }
 
 fn parseTimestamp(iso_string: []const u8) !i64 {
-    // Parse ISO 8601 format: "2018-01-01T10:00:00.000Z" or "2018-01-01T10:00:00Z"
-    // Format: YYYY-MM-DDTHH:MM:SS.sssZ or YYYY-MM-DDTHH:MM:SSZ
-
-    if (iso_string.len < 19) return error.InvalidTimestamp;
-
-    const year = try std.fmt.parseInt(i32, iso_string[0..4], 10);
-    const month = try std.fmt.parseInt(u8, iso_string[5..7], 10);
-    const day = try std.fmt.parseInt(u8, iso_string[8..10], 10);
-    const hour = try std.fmt.parseInt(u8, iso_string[11..13], 10);
-    const minute = try std.fmt.parseInt(u8, iso_string[14..16], 10);
-    const second = try std.fmt.parseInt(u8, iso_string[17..19], 10);
-
-    // Proper epoch calculation accounting for leap years and actual month lengths
-    var days_since_epoch: i64 = 0;
-
-    // Count days in complete years from 1970 to year-1
-    var y: i32 = 1970;
-    while (y < year) : (y += 1) {
-        days_since_epoch += if (isLeapYear(y)) 366 else 365;
-    }
-
-    // Count days in complete months of the target year
-    const month_lengths = if (isLeapYear(year))
-        [_]u8{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
-    else
-        [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-
-    var m: u8 = 1;
-    while (m < month) : (m += 1) {
-        days_since_epoch += month_lengths[m - 1];
-    }
-
-    // Add remaining days (day is 1-indexed, so subtract 1)
-    days_since_epoch += @as(i64, day - 1);
-
-    const seconds = days_since_epoch * 86400 + @as(i64, hour) * 3600 + @as(i64, minute) * 60 + @as(i64, second);
-    return seconds;
+    // Use zdt to parse ISO 8601 string to Unix timestamp
+    const dt = try zdt.Datetime.fromISO8601(iso_string);
+    const unix_ts = dt.toUnix(zdt.Duration.Resolution.second);
+    return @intCast(unix_ts);
 }
 
 fn getAuctionsHandler(allocator: std.mem.Allocator, state: *AppState) ![]u8 {
@@ -713,20 +665,3 @@ test "round-trip - format then parse" {
     }
 }
 
-test "isLeapYear - standard cases" {
-    // Divisible by 4 but not 100: leap year
-    try std.testing.expect(isLeapYear(2024));
-    try std.testing.expect(isLeapYear(2020));
-
-    // Not divisible by 4: not leap year
-    try std.testing.expect(!isLeapYear(2023));
-    try std.testing.expect(!isLeapYear(2025));
-
-    // Divisible by 100 but not 400: not leap year
-    try std.testing.expect(!isLeapYear(1900));
-    try std.testing.expect(!isLeapYear(2100));
-
-    // Divisible by 400: leap year
-    try std.testing.expect(isLeapYear(2000));
-    try std.testing.expect(isLeapYear(2400));
-}

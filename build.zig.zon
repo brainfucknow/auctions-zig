@@ -1,0 +1,12 @@
+.{
+    .name = .auctions_zig,
+    .version = "0.15.2",
+    .dependencies = .{
+        .zdt = .{
+            .url = "https://codeberg.org/FObersteiner/zdt/archive/v0.8.1.tar.gz",
+            .hash = "zdt-0.8.1-xr0_vAxUDwCJRDh9pcAS_mdZBIsvcGTtN-K8JJSWY4I6",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0x43ff90dd9ee03119,
+}
