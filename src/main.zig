@@ -17,13 +17,18 @@ pub fn main() !void {
     var app_state = try api.AppState.init(allocator, events_file);
     defer app_state.deinit();
 
-    const address = try std.net.Address.parseIp("0.0.0.0", 8080);
+    const port: u16 = if (std.process.getEnvVarOwned(allocator, "PORT")) |port_str| blk: {
+        defer allocator.free(port_str);
+        break :blk std.fmt.parseInt(u16, port_str, 10) catch 8080;
+    } else |_| 8080;
+
+    const address = try std.net.Address.parseIp("0.0.0.0", port);
     var listener = try address.listen(.{
         .reuse_address = true,
     });
     defer listener.deinit();
 
-    std.debug.print("Server listening on http://0.0.0.0:8080\n", .{});
+    std.debug.print("Server listening on http://0.0.0.0:{d}\n", .{port});
 
     while (true) {
         const connection = try listener.accept();

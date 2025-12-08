@@ -26,7 +26,20 @@ zig build
 zig build run
 ```
 
-The server will start on `http://0.0.0.0:8080`.
+The server will start on `http://0.0.0.0:8080` by default.
+
+## Configuration
+
+The application can be configured using environment variables:
+
+- `PORT` - Server port (default: `8080`)
+- `EVENTS_FILE` - Path to events file (default: `tmp/events.jsonl`)
+
+Example:
+
+```bash
+PORT=3000 EVENTS_FILE=/data/events.jsonl zig build run
+```
 
 ## Testing
 
@@ -120,12 +133,6 @@ The project is organized into modules:
 ## Event Sourcing
 
 The application uses event sourcing to persist all changes. Events are stored in `tmp/events.jsonl` as newline-delimited JSON. On startup, the application replays all events to rebuild the current state.
-
-The events file path can be configured using the `EVENTS_FILE` environment variable:
-
-```bash
-EVENTS_FILE=/path/to/events.jsonl zig build run
-```
 
 ## License
 
