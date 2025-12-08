@@ -169,19 +169,35 @@ fn formatUser(writer: anytype, user: User) !void {
 }
 
 fn formatIso8601(writer: anytype, timestamp: i64) !void {
-    // Simple ISO 8601 formatting: "YYYY-MM-DDTHH:MM:SSZ"
-    // For simplicity, we'll use basic math (not handling leap years perfectly)
+    // ISO 8601 formatting: "YYYY-MM-DDTHH:MM:SSZ"
     const seconds = @mod(timestamp, 60);
     const minutes = @mod(@divFloor(timestamp, 60), 60);
     const hours = @mod(@divFloor(timestamp, 3600), 24);
-    const days_since_epoch = @divFloor(timestamp, 86400);
+    var days_since_epoch = @divFloor(timestamp, 86400);
 
-    const year: i64 = 1970 + @divFloor(days_since_epoch, 365);
-    const day_of_year = @mod(days_since_epoch, 365);
-    const month: i64 = @min(12, @divFloor(day_of_year, 30) + 1);
-    const day: i64 = @mod(day_of_year, 30) + 1;
+    // Calculate year accounting for leap years
+    var year: i64 = 1970;
+    while (true) {
+        const days_in_year: i64 = if (isLeapYear(year)) 366 else 365;
+        if (days_since_epoch < days_in_year) break;
+        days_since_epoch -= days_in_year;
+        year += 1;
+    }
 
-    // Cast to unsigned to avoid + signs in output
+    // Calculate month and day
+    const month_lengths = if (isLeapYear(year))
+        [_]i64{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+    else
+        [_]i64{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+    var month: i64 = 1;
+    for (month_lengths) |days_in_month| {
+        if (days_since_epoch < days_in_month) break;
+        days_since_epoch -= days_in_month;
+        month += 1;
+    }
+    const day = days_since_epoch + 1;
+
     try writer.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
         @as(u64, @intCast(year)),
         @as(u8, @intCast(month)),
@@ -190,6 +206,10 @@ fn formatIso8601(writer: anytype, timestamp: i64) !void {
         @as(u8, @intCast(minutes)),
         @as(u8, @intCast(seconds)),
     });
+}
+
+fn isLeapYear(year: i64) bool {
+    return (@mod(year, 4) == 0 and @mod(year, 100) != 0) or (@mod(year, 400) == 0);
 }
 
 fn formatIso8601Alloc(allocator: std.mem.Allocator, timestamp: i64) ![]u8 {
@@ -216,21 +236,39 @@ fn jsonStringifyAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
 
 fn parseTimestamp(iso_string: []const u8) !i64 {
     // Parse ISO 8601 format: "2018-01-01T10:00:00.000Z" or "2018-01-01T10:00:00Z"
-    // For simplicity, we'll use a basic parser
     // Format: YYYY-MM-DDTHH:MM:SS.sssZ or YYYY-MM-DDTHH:MM:SSZ
 
     if (iso_string.len < 19) return error.InvalidTimestamp;
 
     const year = try std.fmt.parseInt(i32, iso_string[0..4], 10);
-    const month = try std.fmt.parseInt(u4, iso_string[5..7], 10);
-    const day = try std.fmt.parseInt(u5, iso_string[8..10], 10);
-    const hour = try std.fmt.parseInt(u5, iso_string[11..13], 10);
-    const minute = try std.fmt.parseInt(u6, iso_string[14..16], 10);
-    const second = try std.fmt.parseInt(u6, iso_string[17..19], 10);
+    const month = try std.fmt.parseInt(u8, iso_string[5..7], 10);
+    const day = try std.fmt.parseInt(u8, iso_string[8..10], 10);
+    const hour = try std.fmt.parseInt(u8, iso_string[11..13], 10);
+    const minute = try std.fmt.parseInt(u8, iso_string[14..16], 10);
+    const second = try std.fmt.parseInt(u8, iso_string[17..19], 10);
 
-    // Simple epoch calculation (approximate, ignoring leap years/seconds for simplicity)
-    const days_since_epoch = @as(i64, year - 1970) * 365 + @divFloor(@as(i64, year - 1969), 4) +
-        @as(i64, month - 1) * 30 + @as(i64, day - 1);
+    // Proper epoch calculation accounting for leap years and actual month lengths
+    var days_since_epoch: i64 = 0;
+
+    // Count days in complete years from 1970 to year-1
+    var y: i32 = 1970;
+    while (y < year) : (y += 1) {
+        days_since_epoch += if (isLeapYear(y)) 366 else 365;
+    }
+
+    // Count days in complete months of the target year
+    const month_lengths = if (isLeapYear(year))
+        [_]u8{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+    else
+        [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+    var m: u8 = 1;
+    while (m < month) : (m += 1) {
+        days_since_epoch += month_lengths[m - 1];
+    }
+
+    // Add remaining days (day is 1-indexed, so subtract 1)
+    days_since_epoch += @as(i64, day - 1);
 
     const seconds = days_since_epoch * 86400 + @as(i64, hour) * 3600 + @as(i64, minute) * 60 + @as(i64, second);
     return seconds;
@@ -524,4 +562,171 @@ fn duplicateUser(allocator: std.mem.Allocator, user: User) !User {
 fn jsonError(allocator: std.mem.Allocator, message: []const u8) ![]u8 {
     const response = ErrorResponse{ .message = message };
     return jsonStringifyAlloc(allocator, response);
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "parseTimestamp - regular date" {
+    const timestamp = try parseTimestamp("2025-12-08T17:00:00Z");
+    // Expected: December 8, 2025, 17:00:00
+    try std.testing.expectEqual(@as(i64, 1765213200), timestamp);
+}
+
+test "parseTimestamp - January 1st" {
+    const timestamp = try parseTimestamp("2025-01-01T00:00:00Z");
+    // Expected: January 1, 2025, 00:00:00
+    // Days from 1970-01-01 to 2025-01-01: 20089 days
+    try std.testing.expectEqual(@as(i64, 1735689600), timestamp);
+}
+
+test "parseTimestamp - December 31st" {
+    const timestamp = try parseTimestamp("2025-12-31T23:59:59Z");
+    // Expected: December 31, 2025, 23:59:59
+    // Days from 1970-01-01 to 2025-12-31: 20453 days
+    // Plus 23:59:59 = 86399 seconds
+    try std.testing.expectEqual(@as(i64, 1767225599), timestamp);
+}
+
+test "parseTimestamp - leap year February 29" {
+    const timestamp = try parseTimestamp("2024-02-29T12:00:00Z");
+    // Expected: February 29, 2024 (leap year), 12:00:00
+    // Days from 1970-01-01 to 2024-02-29: 19781 days
+    // Plus 12 hours = 43200 seconds
+    try std.testing.expectEqual(@as(i64, 1709208000), timestamp);
+}
+
+test "parseTimestamp - epoch" {
+    const timestamp = try parseTimestamp("1970-01-01T00:00:00Z");
+    try std.testing.expectEqual(@as(i64, 0), timestamp);
+}
+
+test "parseTimestamp - different months" {
+    // Test that different month lengths are handled correctly
+    const jan31 = try parseTimestamp("2025-01-31T00:00:00Z");
+    const feb1 = try parseTimestamp("2025-02-01T00:00:00Z");
+
+    // Feb 1 should be exactly 1 day after Jan 31
+    try std.testing.expectEqual(jan31 + 86400, feb1);
+}
+
+test "formatIso8601 - regular timestamp" {
+    const allocator = std.testing.allocator;
+
+    // December 8, 2025, 17:00:00
+    const result = try formatIso8601Alloc(allocator, 1765213200);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("2025-12-08T17:00:00Z", result);
+}
+
+test "formatIso8601 - January 1st" {
+    const allocator = std.testing.allocator;
+
+    // January 1, 2025, 00:00:00
+    const result = try formatIso8601Alloc(allocator, 1735689600);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("2025-01-01T00:00:00Z", result);
+}
+
+test "formatIso8601 - December 31st" {
+    const allocator = std.testing.allocator;
+
+    // December 31, 2025, 23:59:59
+    const result = try formatIso8601Alloc(allocator, 1767225599);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("2025-12-31T23:59:59Z", result);
+}
+
+test "formatIso8601 - leap year February 29" {
+    const allocator = std.testing.allocator;
+
+    // February 29, 2024, 12:00:00
+    const result = try formatIso8601Alloc(allocator, 1709208000);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("2024-02-29T12:00:00Z", result);
+}
+
+test "formatIso8601 - epoch" {
+    const allocator = std.testing.allocator;
+
+    const result = try formatIso8601Alloc(allocator, 0);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("1970-01-01T00:00:00Z", result);
+}
+
+test "formatIso8601 - non-leap year February 28" {
+    const allocator = std.testing.allocator;
+
+    // February 28, 2025, 00:00:00
+    const result = try formatIso8601Alloc(allocator, 1740700800);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("2025-02-28T00:00:00Z", result);
+}
+
+test "round-trip - parse then format" {
+    const allocator = std.testing.allocator;
+
+    const test_cases = [_][]const u8{
+        "2025-12-08T17:00:00Z",
+        "2024-02-29T12:00:00Z", // Leap year
+        "2025-01-01T00:00:00Z",
+        "2025-12-31T23:59:59Z",
+        "1970-01-01T00:00:00Z", // Epoch
+        "2025-07-15T14:30:45Z",
+    };
+
+    for (test_cases) |test_case| {
+        const timestamp = try parseTimestamp(test_case);
+        const formatted = try formatIso8601Alloc(allocator, timestamp);
+        defer allocator.free(formatted);
+
+        try std.testing.expectEqualStrings(test_case, formatted);
+    }
+}
+
+test "round-trip - format then parse" {
+    const allocator = std.testing.allocator;
+
+    const test_timestamps = [_]i64{
+        1765213200, // 2025-12-08 17:00:00
+        1709208000, // 2024-02-29 12:00:00 (leap year)
+        1735689600, // 2025-01-01 00:00:00
+        1767225599, // 2025-12-31 23:59:59
+        0,          // 1970-01-01 00:00:00 (epoch)
+        1752589845, // 2025-07-15 14:30:45
+    };
+
+    for (test_timestamps) |test_timestamp| {
+        const formatted = try formatIso8601Alloc(allocator, test_timestamp);
+        defer allocator.free(formatted);
+
+        const parsed = try parseTimestamp(formatted);
+
+        try std.testing.expectEqual(test_timestamp, parsed);
+    }
+}
+
+test "isLeapYear - standard cases" {
+    // Divisible by 4 but not 100: leap year
+    try std.testing.expect(isLeapYear(2024));
+    try std.testing.expect(isLeapYear(2020));
+
+    // Not divisible by 4: not leap year
+    try std.testing.expect(!isLeapYear(2023));
+    try std.testing.expect(!isLeapYear(2025));
+
+    // Divisible by 100 but not 400: not leap year
+    try std.testing.expect(!isLeapYear(1900));
+    try std.testing.expect(!isLeapYear(2100));
+
+    // Divisible by 400: leap year
+    try std.testing.expect(isLeapYear(2000));
+    try std.testing.expect(isLeapYear(2400));
 }
