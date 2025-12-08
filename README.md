@@ -121,6 +121,12 @@ The project is organized into modules:
 
 The application uses event sourcing to persist all changes. Events are stored in `tmp/events.jsonl` as newline-delimited JSON. On startup, the application replays all events to rebuild the current state.
 
+The events file path can be configured using the `EVENTS_FILE` environment variable:
+
+```bash
+EVENTS_FILE=/path/to/events.jsonl zig build run
+```
+
 ## License
 
 MIT

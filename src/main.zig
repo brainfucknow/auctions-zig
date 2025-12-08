@@ -6,7 +6,13 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const events_file = "tmp/events.jsonl";
+    const events_file = std.process.getEnvVarOwned(allocator, "EVENTS_FILE") catch |err| blk: {
+        if (err == error.EnvironmentVariableNotFound) {
+            break :blk try allocator.dupe(u8, "tmp/events.jsonl");
+        }
+        return err;
+    };
+    defer allocator.free(events_file);
 
     var app_state = try api.AppState.init(allocator, events_file);
     defer app_state.deinit();
