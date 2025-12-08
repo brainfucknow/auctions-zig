@@ -12,6 +12,64 @@ const Event = models.Event;
 const Command = models.Command;
 const Repository = domain.Repository;
 
+// Response structs for JSON serialization
+const AuctionListItem = struct {
+    id: i64,
+    startsAt: []const u8,
+    title: []const u8,
+    expiry: []const u8,
+    currency: models.Currency,
+};
+
+const BidResponse = struct {
+    amount: i64,
+    bidder: []const u8,
+};
+
+const AuctionDetailResponse = struct {
+    id: i64,
+    startsAt: []const u8,
+    title: []const u8,
+    expiry: []const u8,
+    currency: models.Currency,
+    bids: []BidResponse,
+    winner: ?[]const u8,
+    winnerPrice: ?i64,
+};
+
+const ErrorResponse = struct {
+    message: []const u8,
+};
+
+const AuctionAddedAuctionResponse = struct {
+    id: i64,
+    startsAt: []const u8,
+    title: []const u8,
+    expiry: []const u8,
+    user: []const u8,
+    type: []const u8,
+    currency: []const u8,
+};
+
+const AuctionAddedResponse = struct {
+    @"$type": []const u8 = "AuctionAdded",
+    at: []const u8,
+    auction: AuctionAddedAuctionResponse,
+};
+
+const BidAcceptedBidResponse = struct {
+    auction: i64,
+    user: []const u8,
+    amount: i64,
+    at: []const u8,
+};
+
+const BidAcceptedResponse = struct {
+    @"$type": []const u8 = "BidAccepted",
+    at: []const u8,
+    bid: BidAcceptedBidResponse,
+};
+
 pub const AppState = struct {
     allocator: std.mem.Allocator,
     repository: Repository,
@@ -123,9 +181,37 @@ fn formatIso8601(writer: anytype, timestamp: i64) !void {
     const month: i64 = @min(12, @divFloor(day_of_year, 30) + 1);
     const day: i64 = @mod(day_of_year, 30) + 1;
 
+    // Cast to unsigned to avoid + signs in output
     try writer.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
-        year, month, day, hours, minutes, seconds
+        @as(u64, @intCast(year)),
+        @as(u8, @intCast(month)),
+        @as(u8, @intCast(day)),
+        @as(u8, @intCast(hours)),
+        @as(u8, @intCast(minutes)),
+        @as(u8, @intCast(seconds)),
     });
+}
+
+fn formatIso8601Alloc(allocator: std.mem.Allocator, timestamp: i64) ![]u8 {
+    var buffer = ArrayList(u8).init(allocator);
+    errdefer buffer.deinit();
+    try formatIso8601(buffer.writer(), timestamp);
+    return buffer.toOwnedSlice();
+}
+
+fn jsonStringifyAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    var jws: std.json.Stringify = .{
+        .writer = &out.writer,
+        .options = .{},
+    };
+
+    try jws.write(value);
+
+    var array_list = out.toArrayList();
+    return try array_list.toOwnedSlice(allocator);
 }
 
 fn parseTimestamp(iso_string: []const u8) !i64 {
@@ -154,31 +240,30 @@ fn getAuctionsHandler(allocator: std.mem.Allocator, state: *AppState) ![]u8 {
     state.mutex.lock();
     defer state.mutex.unlock();
 
-    var list = ArrayList(u8).init(allocator);
-    errdefer list.deinit();
-    const writer = list.writer();
-
-    try writer.writeAll("[");
+    var auctions = ArrayList(AuctionListItem).init(allocator);
+    defer auctions.deinit();
+    defer {
+        for (auctions.items) |item| {
+            allocator.free(item.startsAt);
+            allocator.free(item.expiry);
+        }
+    }
 
     var it = state.repository.iterator();
-    var first = true;
     while (it.next()) |entry| {
-        if (!first) try writer.writeAll(",");
-        first = false;
+        const starts_at_iso = try formatIso8601Alloc(allocator, entry.value_ptr.auction.starts_at);
+        const expiry_iso = try formatIso8601Alloc(allocator, entry.value_ptr.auction.expiry);
 
-        try writer.print(
-            \\{{"id":{d},"startsAt":{d},"title":"{s}","expiry":{d},"currency":"{s}"}}
-        , .{
-            entry.value_ptr.auction.id,
-            entry.value_ptr.auction.starts_at,
-            entry.value_ptr.auction.title,
-            entry.value_ptr.auction.expiry,
-            @tagName(entry.value_ptr.auction.currency),
+        try auctions.append(.{
+            .id = entry.value_ptr.auction.id,
+            .startsAt = starts_at_iso,
+            .title = entry.value_ptr.auction.title,
+            .expiry = expiry_iso,
+            .currency = entry.value_ptr.auction.currency,
         });
     }
 
-    try writer.writeAll("]");
-    return list.toOwnedSlice();
+    return jsonStringifyAlloc(allocator, auctions.items);
 }
 
 fn getAuctionHandler(allocator: std.mem.Allocator, state: *AppState, auction_id: i64) ![]u8 {
@@ -192,41 +277,43 @@ fn getAuctionHandler(allocator: std.mem.Allocator, state: *AppState, auction_id:
     const bids = domain.getBids(entry.state);
     const winner_info = domain.getWinnerAndPrice(entry.state);
 
-    var list = ArrayList(u8).init(allocator);
-    errdefer list.deinit();
-    const writer = list.writer();
+    // Build bids array with formatted bidder strings
+    var bid_responses = ArrayList(BidResponse).init(allocator);
+    defer bid_responses.deinit();
 
-    try writer.print(
-        \\{{"id":{d},"startsAt":{d},"title":"{s}","expiry":{d},"currency":"{s}","bids":[
-    , .{
-        entry.auction.id,
-        entry.auction.starts_at,
-        entry.auction.title,
-        entry.auction.expiry,
-        @tagName(entry.auction.currency),
-    });
+    for (bids) |bid| {
+        var bidder_buffer = ArrayList(u8).init(allocator);
+        defer bidder_buffer.deinit();
+        try formatUser(bidder_buffer.writer(), bid.bidder);
 
-    for (bids, 0..) |bid, i| {
-        if (i > 0) try writer.writeAll(",");
-        try writer.writeAll("{\"amount\":");
-        try writer.print("{d}", .{bid.amount});
-        try writer.writeAll(",\"bidder\":\"");
-        try formatUser(writer, bid.bidder);
-        try writer.writeAll("\"}");
+        try bid_responses.append(.{
+            .amount = bid.amount,
+            .bidder = try bidder_buffer.toOwnedSlice(),
+        });
+    }
+    defer {
+        for (bid_responses.items) |bid_resp| {
+            allocator.free(bid_resp.bidder);
+        }
     }
 
-    try writer.writeAll("]");
+    const starts_at_iso = try formatIso8601Alloc(allocator, entry.auction.starts_at);
+    defer allocator.free(starts_at_iso);
+    const expiry_iso = try formatIso8601Alloc(allocator, entry.auction.expiry);
+    defer allocator.free(expiry_iso);
 
-    if (winner_info) |info| {
-        try writer.print(
-            \\,"winner":"{s}","winnerPrice":{d}
-        , .{ info.winner, info.amount });
-    } else {
-        try writer.writeAll(",\"winner\":null,\"winnerPrice\":null");
-    }
+    const response = AuctionDetailResponse{
+        .id = entry.auction.id,
+        .startsAt = starts_at_iso,
+        .title = entry.auction.title,
+        .expiry = expiry_iso,
+        .currency = entry.auction.currency,
+        .bids = bid_responses.items,
+        .winner = if (winner_info) |info| info.winner else null,
+        .winnerPrice = if (winner_info) |info| info.amount else null,
+    };
 
-    try writer.writeAll("}");
-    return list.toOwnedSlice();
+    return jsonStringifyAlloc(allocator, response);
 }
 
 fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: User, body: []const u8) ![]u8 {
@@ -301,27 +388,34 @@ fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: Us
             const events_slice = [_]Event{event};
             try persistence.writeEvents(allocator, state.events_file, &events_slice);
 
-            var response = ArrayList(u8).init(allocator);
-            errdefer response.deinit();
-            const writer = response.writer();
+            const at_iso = try formatIso8601Alloc(allocator, now);
+            defer allocator.free(at_iso);
+            const starts_at_iso = try formatIso8601Alloc(allocator, starts_at);
+            defer allocator.free(starts_at_iso);
+            const expiry_iso = try formatIso8601Alloc(allocator, ends_at);
+            defer allocator.free(expiry_iso);
 
-            try writer.print(
-                \\{{"$type":"AuctionAdded","at":"
-            , .{});
-            try formatIso8601(writer, now);
-            try writer.print(
-                \\","auction":{{"id":{d},"startsAt":"
-            , .{id});
-            try formatIso8601(writer, starts_at);
-            try writer.print(
-                \\","title":"{s}","expiry":"
-            , .{title});
-            try formatIso8601(writer, ends_at);
-            try writer.print(
-                \\","user":"{s}","type":"English|0|0|0","currency":"{s}"}}}}
-            , .{ user.userId(), @tagName(currency) });
+            const user_id = try allocator.dupe(u8, user.userId());
+            defer allocator.free(user_id);
+            const currency_tag = try allocator.dupe(u8, @tagName(currency));
+            defer allocator.free(currency_tag);
+            const title_dup = try allocator.dupe(u8, title);
+            defer allocator.free(title_dup);
 
-            return response.toOwnedSlice();
+            const response = AuctionAddedResponse{
+                .at = at_iso,
+                .auction = .{
+                    .id = id,
+                    .startsAt = starts_at_iso,
+                    .title = title_dup,
+                    .expiry = expiry_iso,
+                    .user = user_id,
+                    .type = "English|0|0|0",
+                    .currency = currency_tag,
+                },
+            };
+
+            return jsonStringifyAlloc(allocator, response);
         },
         .failure => |err| {
             if (err == error.AuctionAlreadyExists) {
@@ -379,21 +473,24 @@ fn createBidHandler(
             const events_slice = [_]Event{event};
             try persistence.writeEvents(allocator, state.events_file, &events_slice);
 
-            var response = ArrayList(u8).init(allocator);
-            errdefer response.deinit();
-            const writer = response.writer();
+            const at_iso = try formatIso8601Alloc(allocator, now);
+            defer allocator.free(at_iso);
+            const bid_at_iso = try formatIso8601Alloc(allocator, now);
+            defer allocator.free(bid_at_iso);
+            const user_id = try allocator.dupe(u8, user.userId());
+            defer allocator.free(user_id);
 
-            try writer.print(
-                \\{{"$type":"BidAccepted","at":"
-            , .{});
-            try formatIso8601(writer, now);
-            try writer.print(
-                \\","bid":{{"auction":{d},"user":"{s}","amount":{d},"at":"
-            , .{ auction_id, user.userId(), amount });
-            try formatIso8601(writer, now);
-            try writer.writeAll("\"}}");
+            const response = BidAcceptedResponse{
+                .at = at_iso,
+                .bid = .{
+                    .auction = auction_id,
+                    .user = user_id,
+                    .amount = amount,
+                    .at = bid_at_iso,
+                },
+            };
 
-            return response.toOwnedSlice();
+            return jsonStringifyAlloc(allocator, response);
         },
         .failure => |err| {
             if (err == error.UnknownAuction) {
@@ -425,9 +522,6 @@ fn duplicateUser(allocator: std.mem.Allocator, user: User) !User {
 }
 
 fn jsonError(allocator: std.mem.Allocator, message: []const u8) ![]u8 {
-    var list = ArrayList(u8).init(allocator);
-    errdefer list.deinit();
-    const writer = list.writer();
-    try writer.print("{{\"message\":\"{s}\"}}", .{message});
-    return list.toOwnedSlice();
+    const response = ErrorResponse{ .message = message };
+    return jsonStringifyAlloc(allocator, response);
 }
