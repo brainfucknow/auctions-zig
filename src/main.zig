@@ -62,13 +62,25 @@ fn handleConnectionInner(allocator: std.mem.Allocator, state: *api.AppState, con
 
     const method = std.meta.stringToEnum(std.http.Method, method_str) orelse .GET;
 
-    // Find JWT header
+    // Find JWT header and locate body start
     var jwt_payload: ?[]const u8 = null;
-    while (line_it.next()) |line| {
-        if (line.len <= 1) break; // Empty line means end of headers
-        const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-        if (trimmed.len == 0) break;
+    var body_start: usize = 0;
+    var found_empty_line = false;
 
+    while (line_it.next()) |line| {
+        if (line.len <= 1 or std.mem.trim(u8, line, &std.ascii.whitespace).len == 0) {
+            // Empty line marks end of headers and start of body
+            found_empty_line = true;
+            // Calculate where body starts (rest of the iterator)
+            if (line_it.rest().len > 0) {
+                body_start = request_str.len - line_it.rest().len;
+            } else {
+                body_start = request_str.len;
+            }
+            break;
+        }
+
+        const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         const colon_pos = std.mem.indexOf(u8, trimmed, ":") orelse continue;
         const name = std.mem.trim(u8, trimmed[0..colon_pos], &std.ascii.whitespace);
         const value = std.mem.trim(u8, trimmed[colon_pos+1..], &std.ascii.whitespace);
@@ -78,6 +90,12 @@ fn handleConnectionInner(allocator: std.mem.Allocator, state: *api.AppState, con
         }
     }
 
+    // Extract request body
+    const body = if (found_empty_line and body_start < request_str.len)
+        request_str[body_start..]
+    else
+        "";
+
     // Handle request
     const response_body = api.handleRequest(
         allocator,
@@ -85,7 +103,7 @@ fn handleConnectionInner(allocator: std.mem.Allocator, state: *api.AppState, con
         method,
         path,
         jwt_payload,
-        "",
+        body,
     ) catch |err| {
         const error_msg = try std.fmt.allocPrint(allocator, "{{\"message\":\"{s}\"}}", .{@errorName(err)});
         defer allocator.free(error_msg);

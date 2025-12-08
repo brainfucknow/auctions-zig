@@ -237,13 +237,6 @@ fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: Us
 
     const obj = parsed.value.object;
 
-    const id = if (obj.get("id")) |v| blk: {
-        break :blk switch (v) {
-            .integer => |i| i,
-            .float => |f| @as(i64, @intFromFloat(f)),
-            else => return try jsonError(allocator, "Invalid id type"),
-        };
-    } else return try jsonError(allocator, "Missing id");
     const starts_at = if (obj.get("startsAt")) |v| try parseTimestamp(v.string) else return try jsonError(allocator, "Missing startsAt");
     const ends_at = if (obj.get("endsAt")) |v| try parseTimestamp(v.string) else return try jsonError(allocator, "Missing endsAt");
     const title = if (obj.get("title")) |v| v.string else return try jsonError(allocator, "Missing title");
@@ -257,6 +250,29 @@ fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: Us
             .min_raise = 0,
             .time_frame_seconds = 0,
         },
+    };
+
+    // Lock mutex to generate ID and add auction atomically
+    state.mutex.lock();
+    defer state.mutex.unlock();
+
+    // Auto-generate ID if not provided
+    const id = if (obj.get("id")) |v| blk: {
+        break :blk switch (v) {
+            .integer => |i| i,
+            .float => |f| @as(i64, @intFromFloat(f)),
+            else => return try jsonError(allocator, "Invalid id type"),
+        };
+    } else blk: {
+        // Find the maximum ID in the repository and add 1
+        var max_id: i64 = 0;
+        var it = state.repository.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* > max_id) {
+                max_id = entry.key_ptr.*;
+            }
+        }
+        break :blk max_id + 1;
     };
 
     const auction = Auction{
@@ -277,9 +293,6 @@ fn createAuctionHandler(allocator: std.mem.Allocator, state: *AppState, user: Us
             .auction = auction,
         },
     };
-
-    state.mutex.lock();
-    defer state.mutex.unlock();
 
     const result = try domain.handle(allocator, command, &state.repository);
 
