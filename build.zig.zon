@@ -2,9 +2,9 @@
     .name = .auctions_zig,
     .version = "0.15.2",
     .dependencies = .{
-        .zdt = .{
-            .url = "https://codeberg.org/FObersteiner/zdt/archive/v0.8.1.tar.gz",
-            .hash = "zdt-0.8.1-xr0_vAxUDwCJRDh9pcAS_mdZBIsvcGTtN-K8JJSWY4I6",
+        .zeit = .{
+            .url = "https://github.com/rockorager/zeit/archive/refs/tags/v0.7.0.tar.gz",
+            .hash = "zeit-0.6.0-5I6bk7V8AgAY0-hM-vUYtKZUFYhXct-VRkqISNNTfEfb",
         },
     },
     .paths = .{""},
