@@ -3,7 +3,7 @@ const models = @import("models.zig");
 const domain = @import("domain.zig");
 const jwt = @import("jwt.zig");
 const persistence = @import("persistence.zig");
-const zdt = @import("zdt");
+const zeit = @import("zeit");
 const ArrayList = std.array_list.Managed;
 
 const Auction = models.Auction;
@@ -170,29 +170,34 @@ fn formatUser(writer: anytype, user: User) !void {
 }
 
 fn formatIso8601(writer: anytype, timestamp: i64) !void {
-    // Use zdt to format Unix timestamp to ISO 8601
-    const dt = try zdt.Datetime.fromUnix(timestamp, zdt.Duration.Resolution.second, null);
+    // Use zeit to format Unix timestamp to ISO 8601
+    const instant = try zeit.instant(.{
+        .source = .{ .unix_timestamp = timestamp },
+        .timezone = &zeit.utc,
+    });
+    const time = instant.time();
+
     // Format to ISO 8601 with Z suffix
     // Handle year sign: only output '-' for negative years, no sign for positive
-    if (dt.year < 0) {
-        const abs_year: u32 = @intCast(-dt.year);
+    if (time.year < 0) {
+        const abs_year: u32 = @intCast(-time.year);
         try writer.print("-{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
             abs_year,
-            dt.month,
-            dt.day,
-            dt.hour,
-            dt.minute,
-            dt.second,
+            @intFromEnum(time.month),
+            time.day,
+            time.hour,
+            time.minute,
+            time.second,
         });
     } else {
-        const pos_year: u32 = @intCast(dt.year);
+        const pos_year: u32 = @intCast(time.year);
         try writer.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
             pos_year,
-            dt.month,
-            dt.day,
-            dt.hour,
-            dt.minute,
-            dt.second,
+            @intFromEnum(time.month),
+            time.day,
+            time.hour,
+            time.minute,
+            time.second,
         });
     }
 }
@@ -220,10 +225,10 @@ fn jsonStringifyAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
 }
 
 fn parseTimestamp(iso_string: []const u8) !i64 {
-    // Use zdt to parse ISO 8601 string to Unix timestamp
-    const dt = try zdt.Datetime.fromISO8601(iso_string);
-    const unix_ts = dt.toUnix(zdt.Duration.Resolution.second);
-    return @intCast(unix_ts);
+    // Use zeit to parse ISO 8601 string to Unix timestamp
+    const time = try zeit.Time.fromISO8601(iso_string);
+    const instant = time.instant();
+    return instant.unixTimestamp();
 }
 
 fn getAuctionsHandler(allocator: std.mem.Allocator, state: *AppState) ![]u8 {

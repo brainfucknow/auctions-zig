@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zdt = b.dependency("zdt", .{
+    const zeit = b.dependency("zeit", .{
         .target = target,
         .optimize = optimize,
     });
@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    exe.root_module.addImport("zdt", zdt.module("zdt"));
+    exe.root_module.addImport("zeit", zeit.module("zeit"));
 
     b.installArtifact(exe);
 
@@ -39,7 +39,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    exe_unit_tests.root_module.addImport("zdt", zdt.module("zdt"));
+    exe_unit_tests.root_module.addImport("zeit", zeit.module("zeit"));
 
     const persistence_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    persistence_tests.root_module.addImport("zdt", zdt.module("zdt"));
+    persistence_tests.root_module.addImport("zeit", zeit.module("zeit"));
 
     const api_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    api_tests.root_module.addImport("zdt", zdt.module("zdt"));
+    api_tests.root_module.addImport("zeit", zeit.module("zeit"));
 
     const blind_auction_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -66,7 +66,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    blind_auction_tests.root_module.addImport("zdt", zdt.module("zdt"));
+    blind_auction_tests.root_module.addImport("zeit", zeit.module("zeit"));
 
     const english_auction_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    english_auction_tests.root_module.addImport("zdt", zdt.module("zdt"));
+    english_auction_tests.root_module.addImport("zeit", zeit.module("zeit"));
 
     const english_auction_serialization_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -84,7 +84,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    english_auction_serialization_tests.root_module.addImport("zdt", zdt.module("zdt"));
+    english_auction_serialization_tests.root_module.addImport("zeit", zeit.module("zeit"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_persistence_tests = b.addRunArtifact(persistence_tests);
